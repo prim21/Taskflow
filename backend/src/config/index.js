@@ -30,7 +30,20 @@ module.exports = {
 
   // CORS configuration
   cors: {
-    origin: process.env.ALLOWED_ORIGINS === '*' ? '*' : process.env.ALLOWED_ORIGINS?.split(',') || '*',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like curl, Postman, or mobile apps)
+      if (!origin) return callback(null, true);
+      
+      const allowed = process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim().replace(/\/$/, ''))
+        : ['*'];
+        
+      if (allowed.includes('*') || allowed.includes(origin.trim().replace(/\/$/, ''))) {
+        callback(null, origin); // Reflect the origin back to support credentials
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
   },
 };
