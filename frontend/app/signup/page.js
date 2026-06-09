@@ -42,7 +42,7 @@ export default function SignUpPage() {
         try {
             setLoading(true);
             await signup(formData.email, formData.password, formData.displayName);
-            router.push('/login?registered=true');
+            router.push('/tasks');
         } catch (err) {
             if (err.code === 'auth/email-already-in-use') {
                 setError('An account with this email already exists.');
