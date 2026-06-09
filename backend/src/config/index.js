@@ -34,11 +34,16 @@ module.exports = {
       // Allow requests with no origin (like curl, Postman, or mobile apps)
       if (!origin) return callback(null, true);
       
+      const cleanOrigin = origin.trim().replace(/\/$/, '');
       const allowed = process.env.ALLOWED_ORIGINS
         ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim().replace(/\/$/, ''))
         : ['*'];
         
-      if (allowed.includes('*') || allowed.includes(origin.trim().replace(/\/$/, ''))) {
+      const isAllowed = allowed.includes('*') || 
+                        allowed.includes(cleanOrigin) || 
+                        /\.vercel\.app$/.test(cleanOrigin); // Allow any Vercel deployment/preview URL
+        
+      if (isAllowed) {
         callback(null, origin); // Reflect the origin back to support credentials
       } else {
         callback(new Error('Not allowed by CORS'));
