@@ -21,12 +21,16 @@ export function AuthProvider({ children }) {
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
-                // Get the ID token for API requests
-                const token = await firebaseUser.getIdToken();
-                localStorage.setItem('authToken', token);
+                // Set the user immediately with Firebase auth details to unblock the UI/redirects
+                setUser(firebaseUser);
+                setLoading(false);
+                refreshStorageStats();
 
-                // Fetch full profile from backend to get preferences
                 try {
+                    // Get the ID token for API requests
+                    const token = await firebaseUser.getIdToken();
+                    localStorage.setItem('authToken', token);
+
                     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
                     const response = await fetch(`${API_URL}/auth/profile`, {
                         headers: {
@@ -36,23 +40,16 @@ export function AuthProvider({ children }) {
                     const data = await response.json();
 
                     if (data.success) {
-                        // Merge Firebase user with Backend data
-                        // We use a new object to ensure state updates trigger
-                        setUser({ ...firebaseUser, ...data.data });
-                    } else {
-                        setUser(firebaseUser);
+                        // Merge backend profile preferences once loaded in the background
+                        setUser(prev => prev ? { ...prev, ...data.data } : null);
                     }
                 } catch (err) {
-                    console.error("Failed to fetch backend profile", err);
-                    setUser(firebaseUser);
+                    console.error("Failed to fetch backend profile in background", err);
                 }
             } else {
                 localStorage.removeItem('authToken');
                 setUser(null);
-            }
-            setLoading(false);
-            if (firebaseUser) {
-                refreshStorageStats();
+                setLoading(false);
             }
         });
 

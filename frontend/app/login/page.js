@@ -56,7 +56,6 @@ export default function LoginPage() {
             } else {
                 setError(err.message || 'Failed to sign in. Please check your credentials.');
             }
-        } finally {
             setLoading(false);
         }
     };
