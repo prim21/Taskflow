@@ -141,6 +141,7 @@ class TaskService {
                 workspaceId: taskData.workspaceId || null,
                 projectId: taskData.projectId || null, // Added projectId
                 ownerId: taskData.ownerId,
+                subtasks: taskData.subtasks || [], // Added subtasks support
 
                 // Organizational metadata for easy monitoring
                 priorityNumber: priorityCount,

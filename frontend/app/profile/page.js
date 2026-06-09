@@ -72,7 +72,7 @@ export default function ProfilePage() {
             <nav className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     <div className="flex justify-between items-center h-16">
-                        <Link href="/dashboard" className="flex items-center gap-2">
+                        <Link href="/tasks" className="flex items-center gap-2">
                             <div className="w-8 h-8 bg-gray-900 rounded flex items-center justify-center"><svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                             </svg>
@@ -81,8 +81,8 @@ export default function ProfilePage() {
                         </Link>
 
                         <div className="flex items-center gap-4">
-                            <Link href="/dashboard" className="text-gray-700 hover:text-gray-900 font-medium transition-colors">
-                                Dashboard
+                            <Link href="/tasks" className="text-gray-700 hover:text-gray-900 font-medium transition-colors">
+                                Tasks
                             </Link>
                             <button
                                 onClick={handleLogout}

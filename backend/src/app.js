@@ -12,6 +12,8 @@ const logger = require('./utils/logger');
  * Express Application Setup
  */
 
+const path = require('path');
+
 const app = express();
 
 // Security middleware
@@ -23,6 +25,9 @@ app.use(cors(config.cors));
 // Body parsing middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve static uploads locally
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Logging middleware
 if (config.nodeEnv === 'development') {
@@ -70,11 +75,13 @@ app.use(notFound);
 app.use(errorHandler);
 
 // Start server
-const PORT = config.port;
-app.listen(PORT, () => {
-    logger.info(`Server is running on port ${PORT}`);
-    logger.info(`Environment: ${config.nodeEnv}`);
-    logger.info(`API available at: http://localhost:${PORT}/api`);
-});
+if (process.env.NODE_ENV !== 'test') {
+    const PORT = config.port;
+    app.listen(PORT, () => {
+        logger.info(`Server is running on port ${PORT}`);
+        logger.info(`Environment: ${config.nodeEnv}`);
+        logger.info(`API available at: http://localhost:${PORT}/api`);
+    });
+}
 
 module.exports = app;

@@ -3,10 +3,11 @@ const ApiResponse = require('../utils/response');
 const logger = require('../utils/logger');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 
 /**
  * Upload Controller
- * Handles file uploads to Firebase Storage
+ * Handles file uploads to Firebase Storage with local directory fallback
  */
 
 class UploadController {
@@ -24,46 +25,73 @@ class UploadController {
 
             const file = req.file;
             const uid = req.user.uid;
+            let publicUrl;
 
-            // Create a unique filename
+            // Create unique filename
             const fileExtension = path.extname(file.originalname);
             const fileName = `users/${uid}/profile-${Date.now()}${fileExtension}`;
 
-            // Explicitly use the bucket from config
-            const bucketName = firebaseConfig.storageBucket;
-
-            if (!bucketName) {
-                logger.error('Firebase storage bucket is not configured');
-                return ApiResponse.internalError(res, 'Server configuration error');
+            // Check if we should fallback to local filesystem storage
+            let useLocal = false;
+            let bucketName;
+            try {
+                bucketName = firebaseConfig.storageBucket;
+                if (!bucketName || !admin.apps.length) {
+                    useLocal = true;
+                } else {
+                    // Try referencing storage; if it fails, trigger catch block
+                    admin.storage();
+                }
+            } catch (err) {
+                useLocal = true;
             }
 
-            logger.info(`Using storage bucket: ${bucketName}`);
+            if (useLocal) {
+                const uploadsDir = path.join(__dirname, '../../uploads');
+                if (!fs.existsSync(uploadsDir)) {
+                    fs.mkdirSync(uploadsDir, { recursive: true });
+                }
 
-            const bucket = admin.storage().bucket(bucketName);
-            const fileRef = bucket.file(fileName);
+                const localFileName = `profile-${uid}-${Date.now()}${fileExtension}`;
+                const localFilePath = path.join(uploadsDir, localFileName);
 
-            // Upload the file with a download token
-            const downloadToken = crypto.randomUUID();
+                fs.writeFileSync(localFilePath, file.buffer);
+                publicUrl = `http://localhost:3000/uploads/${localFileName}`;
+                logger.info(`Profile picture saved locally: ${publicUrl}`);
 
-            await fileRef.save(file.buffer, {
-                metadata: {
-                    contentType: file.mimetype,
+                // Update local auth record photoURL
+                try {
+                    await admin.auth().updateUser(uid, {
+                        photoURL: publicUrl
+                    });
+                } catch (e) {
+                    // Ignore auth record update errors in mock
+                }
+            } else {
+                logger.info(`Using storage bucket: ${bucketName}`);
+                const bucket = admin.storage().bucket(bucketName);
+                const fileRef = bucket.file(fileName);
+
+                // Upload the file with a download token
+                const downloadToken = crypto.randomUUID();
+
+                await fileRef.save(file.buffer, {
                     metadata: {
-                        firebaseStorageDownloadTokens: downloadToken
-                    }
-                },
-            });
+                        contentType: file.mimetype,
+                        metadata: {
+                            firebaseStorageDownloadTokens: downloadToken
+                        }
+                    },
+                });
 
-            // Construct the Firebase Storage download URL manually
-            // This works like the client SDK and robustly avoids signing permission issues
-            const publicUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(fileName)}?alt=media&token=${downloadToken}`;
+                // Construct download URL
+                publicUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(fileName)}?alt=media&token=${downloadToken}`;
+                logger.info(`Uploaded to Firebase: ${publicUrl}`);
 
-            logger.info(`Generated public URL: ${publicUrl}`);
-
-            // Optional: Update user profile immediately
-            await admin.auth().updateUser(uid, {
-                photoURL: publicUrl
-            });
+                await admin.auth().updateUser(uid, {
+                    photoURL: publicUrl
+                });
+            }
 
             return ApiResponse.success(res, { url: publicUrl }, 'File uploaded successfully');
         } catch (error) {

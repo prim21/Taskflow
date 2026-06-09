@@ -26,6 +26,7 @@ router.use('/upload', require('./uploadRoutes'));
 router.use('/documents', require('./documentRoutes'));
 router.use('/calendar', require('./calendarRoutes'));
 router.use('/contact', require('./contactRoutes'));
+router.use('/workspaces', require('./workspaceRoutes'));
 
 // Add more routes here as needed
 

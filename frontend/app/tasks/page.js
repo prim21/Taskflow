@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import DashboardSidebar from '@/components/DashboardSidebar';
@@ -8,21 +8,35 @@ import DashboardSidebar from '@/components/DashboardSidebar';
 const API_URL = 'http://localhost:3000/api';
 
 const COLUMNS = [
-    { id: 'todo', label: 'Not started', color: 'bg-gray-100 text-gray-600' },
+    { id: 'todo', label: 'To do', color: 'bg-gray-100 text-gray-600' },
     { id: 'in-progress', label: 'In progress', color: 'bg-blue-50 text-blue-600' },
     { id: 'in-review', label: 'In review', color: 'bg-yellow-50 text-yellow-600' },
     { id: 'blocked', label: 'Completed', color: 'bg-green-50 text-green-600' }
 ];
+
+
 
 export default function TasksPage() {
     const { user, loading: authLoading, getToken, logout, updatePreferences, updateProfile, storageStats } = useAuth();
     const router = useRouter();
 
     const [tasks, setTasks] = useState([]);
+    // Drag state refs (no React state = no re-renders during drag)
+    const dragState = useRef({ isDragging: false });
+    const columnRefs = useRef({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [createLoading, setCreateLoading] = useState(false);
+
+    // View State
+    const [viewMode, setViewMode] = useState('board'); // 'board' or 'list'
+    const [expandedColumns, setExpandedColumns] = useState({
+        todo: true,
+        'in-progress': true,
+        'in-review': true,
+        blocked: true
+    });
 
     // Filter & Sort State
     const [filters, setFilters] = useState({
@@ -51,6 +65,10 @@ export default function TasksPage() {
             if (user.preferences.colorMode) {
                 setColorMode(user.preferences.colorMode);
             }
+
+            if (user.preferences.viewMode) {
+                setViewMode(user.preferences.viewMode);
+            }
         }
     }, [user]);
 
@@ -65,9 +83,18 @@ export default function TasksPage() {
         updatePreferences({ colorMode: mode });
     };
 
+
+
+    const toggleColumnCollapse = (colId) => {
+        setExpandedColumns(prev => ({
+            ...prev,
+            [colId]: !prev[colId]
+        }));
+    };
+
     // Helper for dynamic card colors
     const getCardColorClass = (task) => {
-        if (colorMode === 'none') return 'border-gray-100/50 hover:shadow-md';
+        if (colorMode === 'none') return 'border-gray-100 hover:shadow-md bg-white';
 
         if (colorMode === 'priority') {
             const colors = {
@@ -75,7 +102,7 @@ export default function TasksPage() {
                 medium: 'border-amber-200 bg-amber-50/30 hover:shadow-amber-100',
                 low: 'border-blue-200 bg-blue-50/30 hover:shadow-blue-100'
             };
-            return colors[task.priority] || 'border-gray-200';
+            return colors[task.priority] || 'border-gray-200 bg-white';
         }
 
         if (colorMode === 'category') {
@@ -84,9 +111,9 @@ export default function TasksPage() {
                 'Design': 'border-purple-200 bg-purple-50/30 hover:shadow-purple-100',
                 'Business': 'border-emerald-200 bg-emerald-50/30 hover:shadow-emerald-100'
             };
-            return colors[task.category] || 'border-gray-200';
+            return colors[task.category] || 'border-gray-200 bg-white';
         }
-        return 'border-gray-100/50';
+        return 'border-gray-100 bg-white';
     };
 
     // Edit Mode State
@@ -99,8 +126,41 @@ export default function TasksPage() {
         priority: 'medium',
         status: 'todo',
         dueDate: '',
-        category: 'Development'
+        category: 'Development',
+        subtasks: [] // Added subtasks
     });
+
+    const [subtaskInput, setSubtaskInput] = useState(''); // Text input for subtask
+
+    const addSubtask = () => {
+        if (!subtaskInput.trim()) return;
+        const newSubItem = {
+            id: Date.now().toString(),
+            text: subtaskInput.trim(),
+            completed: false
+        };
+        setNewTask(prev => ({
+            ...prev,
+            subtasks: [...(prev.subtasks || []), newSubItem]
+        }));
+        setSubtaskInput('');
+    };
+
+    const toggleSubtask = (subtaskId) => {
+        setNewTask(prev => ({
+            ...prev,
+            subtasks: (prev.subtasks || []).map(sub =>
+                sub.id === subtaskId ? { ...sub, completed: !sub.completed } : sub
+            )
+        }));
+    };
+
+    const deleteSubtask = (subtaskId) => {
+        setNewTask(prev => ({
+            ...prev,
+            subtasks: (prev.subtasks || []).filter(sub => sub.id !== subtaskId)
+        }));
+    };
 
     const [workspaces, setWorkspaces] = useState([]);
     const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState(false);
@@ -384,53 +444,88 @@ export default function TasksPage() {
         }
     };
 
-    // Drag and Drop Handlers
-    const handleDragStart = (e, taskId) => {
-        e.dataTransfer.setData('taskId', taskId);
-        e.dataTransfer.effectAllowed = 'move';
-        // Optional: Add a dragging class for visual feedback
-        e.target.classList.add('opacity-50');
-    };
-
-    const handleDragEnd = (e) => {
-        e.target.classList.remove('opacity-50');
-    };
-
-    const handleDragOver = (e) => {
+    // ─── Drag & Drop (pure DOM — no React re-renders during drag) ───────────
+    const handleMouseDown = (e, task) => {
+        if (e.button !== 0) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
+        e.stopPropagation();
+
+        // ── 1. Create DOM ghost card ─────────────────────────────────────────
+        const ghost = document.createElement('div');
+        ghost.style.cssText = `
+            position:fixed; z-index:9999; pointer-events:none;
+            width:280px; background:#fff;
+            border-radius:12px; padding:16px; box-shadow:0 20px 40px rgba(0,0,0,0.18);
+            transform:rotate(2deg) scale(1.04); opacity:0.93;
+            left:${e.clientX - 140}px; top:${e.clientY - 40}px;
+            font-family:inherit;
+        `;
+        ghost.innerHTML = `
+            ${task.category ? `<span style="font-size:10px;text-transform:uppercase;font-weight:700;letter-spacing:.05em;background:#fff7ed;color:#ea580c;padding:2px 6px;border-radius:4px;">${task.category}</span>` : ''}
+            <p style="font-weight:600;font-size:14px;margin:6px 0 4px;color:#111;">${task.title}</p>
+            ${task.description ? `<p style="font-size:12px;color:#9ca3af;margin:0;">${task.description.slice(0, 60)}${task.description.length > 60 ? '…' : ''}</p>` : ''}
+        `;
+        document.body.appendChild(ghost);
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'grabbing';
+
+        // ── 2. Track drop target ──────────────────────────────────────────────
+        let currentDropColumn = null;
+
+        const onMouseMove = (mv) => {
+            // Move ghost
+            ghost.style.left = `${mv.clientX - 140}px`;
+            ghost.style.top = `${mv.clientY - 40}px`;
+
+            // Find column under cursor
+            let found = null;
+            for (const [colId, el] of Object.entries(columnRefs.current)) {
+                if (!el) continue;
+                const r = el.getBoundingClientRect();
+                if (mv.clientX >= r.left && mv.clientX <= r.right &&
+                    mv.clientY >= r.top && mv.clientY <= r.bottom) {
+                    found = colId; break;
+                }
+            }
+            currentDropColumn = found;
+        };
+
+        const onMouseUp = async () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+
+            // Clean up ghost
+            ghost.remove();
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+
+            const dropColumn = currentDropColumn;
+            if (!dropColumn || task.status === dropColumn) return;
+
+            // ── Optimistic UI update (one setState call, here at the end) ────
+            setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: dropColumn } : t));
+
+            // ── Persist to backend ────────────────────────────────────────────
+            try {
+                const token = await getToken();
+                const res = await fetch(`${API_URL}/tasks/${task.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                    body: JSON.stringify({ status: dropColumn })
+                });
+                if (!res.ok) throw new Error(`${res.status}`);
+            } catch (err) {
+                console.error('Drag drop failed:', err);
+                // Revert
+                setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: task.status } : t));
+            }
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
     };
+    // ─────────────────────────────────────────────────────────────────────────
 
-    const handleDrop = async (e, newStatus) => {
-        e.preventDefault();
-        const taskId = e.dataTransfer.getData('taskId');
-
-        if (!taskId) return;
-
-        const task = tasks.find(t => t.id === taskId);
-        if (!task || task.status === newStatus) return;
-
-        // Optimistic update
-        const updatedTask = { ...task, status: newStatus };
-        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
-
-        try {
-            const token = await getToken();
-            await fetch(`${API_URL}/tasks/${task.id}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ status: newStatus })
-            });
-        } catch (err) {
-            console.error(err);
-            // Revert on error
-            setTasks(prev => prev.map(t => t.id === taskId ? task : t));
-            alert('Failed to move task');
-        }
-    };
 
     const handleSaveTask = async (e) => {
         e.preventDefault();
@@ -553,7 +648,8 @@ export default function TasksPage() {
             priority: task.priority,
             status: task.status,
             dueDate: task.dueDate ? task.dueDate.split('T')[0] : '',
-            category: task.category || 'General'
+            category: task.category || 'General',
+            subtasks: task.subtasks || []
         });
         setIsModalOpen(true);
     };
@@ -567,8 +663,10 @@ export default function TasksPage() {
             priority: 'medium',
             status: 'todo',
             dueDate: '',
-            category: 'Development'
+            category: 'Development',
+            subtasks: []
         });
+        setSubtaskInput('');
     };
 
     const getTasksByStatus = (status) => {
@@ -587,6 +685,46 @@ export default function TasksPage() {
         return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
 
+    // Calculate stats
+    const totalCount = tasks.length;
+    const completedTasks = tasks.filter(t => t.status === 'blocked');
+    const completedCount = completedTasks.length;
+    const completionRate = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+    const highPriorityCount = tasks.filter(t => t.priority === 'high' && t.status !== 'blocked').length;
+
+    const overdueCount = tasks.filter(t => {
+        if (!t.dueDate || t.status === 'blocked') return false;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const due = new Date(t.dueDate);
+        return due < today;
+    }).length;
+
+    const handleToggleTaskStatus = async (task) => {
+        const newStatus = task.status === 'blocked' ? 'todo' : 'blocked';
+
+        // Optimistic update
+        const updatedTask = { ...task, status: newStatus };
+        setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+
+        try {
+            const token = await getToken();
+            await fetch(`${API_URL}/tasks/${task.id}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ status: newStatus })
+            });
+        } catch (err) {
+            console.error(err);
+            setTasks(prev => prev.map(t => t.id === task.id ? task : t));
+            alert('Failed to update task status');
+        }
+    };
+
     if (authLoading || !user) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-white">
@@ -597,7 +735,6 @@ export default function TasksPage() {
 
     return (
         <div className="flex h-screen bg-[#f3f4f6] font-sans text-slate-600 p-4 gap-4 overflow-hidden">
-            {/* Sidebar - Floating Card Style */}
             {/* Sidebar - Floating Card Style */}
             <DashboardSidebar
                 user={user}
@@ -619,53 +756,120 @@ export default function TasksPage() {
                 storageStats={storageStats}
             />
 
-
-
             {/* Main Area */}
             <main className="flex-1 flex flex-col min-w-0 bg-white rounded-3xl shadow-sm border border-white/50 overflow-hidden relative">
-                {/* Header */}
                 <header className="px-8 py-5 flex items-center justify-between bg-white/80 backdrop-blur-sm sticky top-0 z-20 border-b border-gray-100">
                     <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2 text-gray-400">
-                            <button className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 19l-7-7 7-7" /></svg>
-                            </button>
-                            <button className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5l7 7-7 7" /></svg>
-                            </button>
-                        </div>
-                        <div className="h-6 w-px bg-gray-200"></div>
                         <h1 className="text-xl font-bold text-gray-800">
                             {activeProject ? (projects.find(p => p.id === activeProject)?.name || 'Project') : 'My Tasks'}
                         </h1>
                     </div>
 
                     <div className="flex items-center gap-4">
+
+
+                        {/* Board / List Toggle */}
+                        <div className="bg-gray-100/80 p-0.5 rounded-xl flex items-center border border-gray-200/40">
+                            <button
+                                onClick={() => setViewMode('board')}
+                                className={`p-2 rounded-lg transition-all ${viewMode === 'board'
+                                    ? 'bg-white text-gray-900 shadow-sm'
+                                    : 'text-gray-400 hover:text-gray-600'
+                                    }`}
+                                title="Kanban Board"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></svg>
+                            </button>
+                            <button
+                                onClick={() => setViewMode('list')}
+                                className={`p-2 rounded-lg transition-all ${viewMode === 'list'
+                                    ? 'bg-white text-gray-900 shadow-sm'
+                                    : 'text-gray-400 hover:text-gray-600'
+                                    }`}
+                                title="List View"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>
+                            </button>
+                        </div>
+
                         <div className="relative">
                             <input
                                 type="text"
                                 placeholder="Search"
                                 value={filters.search}
                                 onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
-                                className="w-64 bg-gray-100/50 border-none rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-100 transition-all pl-10"
+                                className="w-48 bg-gray-100/50 border-none rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-100 transition-all pl-10"
                             />
                             <svg className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                         </div>
+
                         <button
                             onClick={() => {
                                 setNewTask(prev => ({ ...prev, status: 'todo' }));
                                 setIsModalOpen(true);
                             }}
-                            className="p-2.5 bg-gray-900 text-white rounded-xl hover:bg-gray-800 transition-colors shadow-lg shadow-gray-900/20"
+                            className="p-2.5 bg-gray-900 text-white rounded-xl transition-all shadow-lg hover:bg-gray-800 shadow-gray-900/20"
                         >
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                         </button>
                     </div>
-                </header >
+                </header>
 
                 <div className="flex-1 overflow-x-hidden overflow-y-auto custom-scrollbar">
                     <div className="p-8 pb-0">
+                        {/* Workspace Insights Panel */}
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                            <div className="bg-white/80 backdrop-blur-sm border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex items-center justify-between group">
+                                <div>
+                                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Total Tasks</span>
+                                    <span className="text-2xl font-bold text-gray-900 tracking-tight">{totalCount}</span>
+                                </div>
+                                <div className="w-11 h-11 rounded-xl bg-slate-50 text-slate-500 border border-slate-100 flex items-center justify-center transition-transform group-hover:scale-105">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                                </div>
+                            </div>
 
+                            <div className="bg-white/80 backdrop-blur-sm border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex items-center justify-between group">
+                                <div className="min-w-0">
+                                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Completion</span>
+                                    <span className="text-2xl font-bold text-gray-900 tracking-tight">{completionRate}%</span>
+                                    <span className="text-[10px] text-gray-400 block font-medium mt-0.5">{completedCount} of {totalCount} done</span>
+                                </div>
+                                <div className="relative w-12 h-12 flex items-center justify-center shrink-0">
+                                    <svg className="w-12 h-12 transform -rotate-90">
+                                        <circle cx="24" cy="24" r="18" stroke="#f1f5f9" strokeWidth="3.5" fill="transparent" />
+                                        <circle cx="24" cy="24" r="18" stroke="#1e293b" strokeWidth="3.5" fill="transparent"
+                                            strokeDasharray={`${2 * Math.PI * 18}`}
+                                            strokeDashoffset={`${2 * Math.PI * 18 * (1 - completionRate / 100)}`}
+                                            className="transition-all duration-700 ease-out"
+                                        />
+                                    </svg>
+                                    <span className="absolute text-[10px] font-bold text-gray-750">{completionRate}%</span>
+                                </div>
+                            </div>
+
+                            <div className="bg-white/80 backdrop-blur-sm border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex items-center justify-between group">
+                                <div>
+                                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Urgent Attention</span>
+                                    <span className="text-2xl font-bold text-gray-900 tracking-tight">{highPriorityCount}</span>
+                                    <span className="text-[10px] text-gray-400 block font-medium mt-0.5">High priority active tasks</span>
+                                </div>
+                                <div className={`w-11 h-11 rounded-xl ${highPriorityCount > 0 ? 'bg-red-50 text-red-500 border-red-100/60 animate-pulse' : 'bg-slate-50 text-slate-400 border-slate-100'} border flex items-center justify-center transition-transform group-hover:scale-105`}>
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                                </div>
+                            </div>
+
+                            <div className="bg-white/80 backdrop-blur-sm border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-all flex items-center justify-between group">
+                                <div>
+                                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Overdue Tasks</span>
+                                    <span className="text-2xl font-bold text-gray-900 tracking-tight">{overdueCount}</span>
+                                    <span className="text-[10px] text-gray-400 block font-medium mt-0.5">Missed deadlines</span>
+                                </div>
+                                <div className={`w-11 h-11 rounded-xl ${overdueCount > 0 ? 'bg-amber-50 text-amber-500 border-amber-100/60' : 'bg-slate-50 text-slate-400 border-slate-100'} border flex items-center justify-center transition-transform group-hover:scale-105`}>
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                </div>
+                            </div>
+                        </div>
 
                         {/* Tasks Section */}
                         <div className="flex-1 flex flex-col min-h-[500px]">
@@ -681,125 +885,201 @@ export default function TasksPage() {
                                 </div>
                             </div>
 
-                            {/* Kanban Board Container */}
-                            <div className="flex-1 overflow-x-auto pb-4 -mx-8 px-8">
-                                <div className="flex gap-8 min-w-max">
-                                    <div className="flex gap-8 h-full min-w-max">
-                                        {COLUMNS.map(column => {
-                                            const columnTasks = getTasksByStatus(column.id);
-                                            return (
+                            {viewMode === 'board' ? (
+                                /* Kanban Board View */
+                                <>
+                                    <div className="flex-1 overflow-x-auto pb-4 -mx-8 px-8">
+                                        <div className="flex gap-8 min-w-max">
+                                            {COLUMNS.map(column => {
+                                                const columnTasks = getTasksByStatus(column.id);
+                                                return (
+                                                    <div
+                                                        key={column.id}
+                                                        ref={el => columnRefs.current[column.id] = el}
+                                                        className="w-[320px] flex-shrink-0 flex flex-col rounded-2xl transition-all duration-150"
+                                                    >
+                                                        <div className="flex items-center justify-between mb-6">
+                                                            <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider flex items-center gap-2 ${column.color}`}>{column.label}</div>
+                                                            <span className="text-gray-400 text-xs font-medium bg-gray-50 px-2 py-0.5 rounded-full">{columnTasks.length}</span>
+                                                        </div>
+                                                        <div className="flex flex-col gap-4">
+                                                            {columnTasks.map(task => (
+                                                                <div
+                                                                    key={task.id}
+                                                                    onMouseDown={(e) => handleMouseDown(e, task)}
+                                                                    className={`rounded-xl p-6 shadow-sm border transition-shadow duration-200 group relative cursor-grab select-none ${getCardColorClass(task)}`}
+                                                                >
+                                                                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-100 rounded-lg p-1 z-10">
+                                                                        <button onClick={(e) => { e.stopPropagation(); openEditModal(task); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded" title="Edit"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                                                        <button onClick={(e) => { e.stopPropagation(); openEditModal(task); }} className="p-1.5 text-gray-400 hover:text-gray-900 hover:bg-gray-50 rounded" title="View"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg></button>
+                                                                        <button onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded" title="Delete"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                                                    </div>
+                                                                    {cardOptions.showCategory && (<div className="flex items-start justify-between mb-2"><span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-1 rounded-sm ${task.category === 'Design' ? 'bg-purple-50 text-purple-600' : task.category === 'Business' ? 'bg-blue-50 text-blue-600' : task.category === 'Development' ? 'bg-orange-50 text-orange-600' : 'bg-gray-100 text-gray-600'}`}>{task.category || 'General'}</span></div>)}
+                                                                    <h4 className="font-semibold text-gray-900 mb-2 text-sm leading-snug">{task.title}</h4>
+                                                                    {cardOptions.showDescription && task.description && (<p className="text-gray-500 text-xs mb-4 line-clamp-2">{task.description}</p>)}
+                                                                    {task.subtasks && task.subtasks.length > 0 && (() => { const done = task.subtasks.filter(s => s.completed).length; const total = task.subtasks.length; const percent = Math.round((done / total) * 100); return (<div className="mb-4"><div className="flex justify-between text-[10px] font-bold text-gray-400 uppercase mb-1"><span>Subtasks</span><span>{done}/{total}</span></div><div className="w-full bg-gray-100 rounded-full h-1"><div className={`h-full rounded-full ${percent === 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: `${percent}%` }} /></div></div>); })()}
+                                                                    <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+                                                                        {cardOptions.showPriority ? (<div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${task.priority === 'high' ? 'bg-red-500' : task.priority === 'medium' ? 'bg-yellow-500' : 'bg-green-500'}`} /><span className="text-xs text-gray-400 font-medium capitalize">{task.priority}</span></div>) : <div />}
+                                                                        {cardOptions.showDate && task.dueDate && (<div className="flex items-center gap-1.5 text-gray-400 text-xs font-semibold bg-gray-50 px-2 py-1 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>{formatDate(task.dueDate)}</div>)}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                            <button onClick={() => { setNewTask(prev => ({ ...prev, status: column.id })); setIsModalOpen(true); }} className="w-full py-3 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 border border-transparent hover:border-gray-200 transition-all flex items-center justify-center gap-2 font-medium text-sm"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>Add task</button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    {/* (ghost card rendered as real DOM element in handleMouseDown, not React) */}
+                                </>
+                            ) : (
+                                /* List View Container */
+                                <div className="flex-1 space-y-6 pb-8">
+                                    {COLUMNS.map(column => {
+                                        const columnTasks = getTasksByStatus(column.id);
+                                        const isExpanded = expandedColumns[column.id] !== false;
+                                        return (
+                                            <div key={column.id} className="bg-gray-50/50 rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+                                                {/* Column Group Header */}
                                                 <div
-                                                    key={column.id}
-                                                    className="w-[320px] flex-shrink-0 flex flex-col h-full"
-                                                    onDragOver={handleDragOver}
-                                                    onDrop={(e) => handleDrop(e, column.id)}
+                                                    onClick={() => toggleColumnCollapse(column.id)}
+                                                    className="px-6 py-4 flex items-center justify-between cursor-pointer hover:bg-gray-100/30 transition-colors border-b border-gray-100 bg-white"
                                                 >
-                                                    {/* Column Header */}
-                                                    <div className="flex items-center justify-between mb-6">
+                                                    <div className="flex items-center gap-3">
                                                         <div className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider flex items-center gap-2 ${column.color}`}>
                                                             {column.label}
                                                         </div>
-                                                        <span className="text-gray-400 text-xs font-medium">{columnTasks.length}</span>
+                                                        <span className="text-gray-400 text-xs font-medium bg-gray-100 px-2 py-0.5 rounded-full">{columnTasks.length}</span>
                                                     </div>
-
-                                                    {/* Tasks */}
-                                                    <div className="flex flex-col gap-4">
-                                                        {columnTasks.map(task => (
-                                                            <div
-                                                                key={task.id}
-                                                                draggable
-                                                                onDragStart={(e) => handleDragStart(e, task.id)}
-                                                                onDragEnd={handleDragEnd}
-                                                                className={`rounded-xl p-6 shadow-sm border transition-all group relative cursor-move ${getCardColorClass(task)}`}
-                                                            >
-                                                                {/* Hover Quick Actions */}
-                                                                <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow-sm border border-gray-100 rounded-lg p-1 z-10">
-                                                                    {/* Edit */}
-                                                                    <button
-                                                                        onClick={(e) => { e.stopPropagation(); openEditModal(task); }}
-                                                                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                                                                        title="Edit"
-                                                                    >
-                                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                                                                    </button>
-
-                                                                    {/* View */}
-                                                                    <button
-                                                                        onClick={(e) => { e.stopPropagation(); openEditModal(task); }}
-                                                                        className="p-1.5 text-gray-400 hover:text-gray-900 hover:bg-gray-50 rounded"
-                                                                        title="View Details"
-                                                                    >
-                                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                                                                    </button>
-
-                                                                    {/* Delete */}
-                                                                    <button
-                                                                        onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
-                                                                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
-                                                                        title="Delete"
-                                                                    >
-                                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                                                    </button>
-                                                                </div>
-
-                                                                {cardOptions.showCategory && (
-                                                                    <div className="flex items-start justify-between mb-2">
-                                                                        <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-1 rounded-sm ${task.category === 'Design' ? 'bg-purple-50 text-purple-600' :
-                                                                            task.category === 'Business' ? 'bg-blue-50 text-blue-600' :
-                                                                                task.category === 'Development' ? 'bg-orange-50 text-orange-600' :
-                                                                                    'bg-gray-100 text-gray-600'
-                                                                            }`}>
-                                                                            {task.category || 'General'}
-                                                                        </span>
-                                                                    </div>
-                                                                )}
-
-                                                                <h4 className="font-medium text-gray-900 mb-2 text-base leading-snug">{task.title}</h4>
-
-                                                                {cardOptions.showDescription && task.description && (
-                                                                    <p className="text-gray-500 text-sm mb-4 line-clamp-2">{task.description}</p>
-                                                                )}
-
-                                                                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-50">
-                                                                    {cardOptions.showPriority ? (
-                                                                        <div className="flex items-center gap-2">
-                                                                            {/* Priority Indicator */}
-                                                                            <div className={`w-2 h-2 rounded-full ${task.priority === 'high' ? 'bg-red-500' :
-                                                                                task.priority === 'medium' ? 'bg-yellow-500' :
-                                                                                    'bg-green-500'
-                                                                                }`} title={`Priority: ${task.priority}`}></div>
-                                                                            <span className="text-xs text-gray-400 font-medium capitalize">{task.priority}</span>
-                                                                        </div>
-                                                                    ) : <div></div>}
-
-                                                                    {cardOptions.showDate && task.dueDate && (
-                                                                        <div className="flex items-center gap-1.5 text-gray-400 text-xs font-medium bg-gray-50 px-2 py-1 rounded">
-                                                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                                                            {formatDate(task.dueDate)}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            </div>
-                                                        ))}
-
-                                                        {/* Add Task Button (Ghost Style) */}
-                                                        <button
-                                                            onClick={() => {
-                                                                setNewTask(prev => ({ ...prev, status: column.id }));
-                                                                setIsModalOpen(true);
-                                                            }}
-                                                            className="w-full py-3 rounded-lg text-gray-400 hover:text-gray-900 hover:bg-white border border-transparent hover:border-gray-200 transition-all flex items-center justify-center gap-2 font-medium text-sm"
-                                                        >
-                                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                                                            Add task
-                                                        </button>
-                                                    </div>
+                                                    <button className="text-gray-400 hover:text-gray-600">
+                                                        {isExpanded ? (
+                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" /></svg>
+                                                        ) : (
+                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                                                        )}
+                                                    </button>
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
+
+                                                {/* Tasks List */}
+                                                {isExpanded && (
+                                                    <div className="p-4 space-y-3 bg-white/40">
+                                                        {columnTasks.length === 0 ? (
+                                                            <div className="text-center py-6 text-gray-400 text-sm font-medium border border-dashed border-gray-100 rounded-xl bg-white/30">
+                                                                No tasks in this section
+                                                            </div>
+                                                        ) : (
+                                                            columnTasks.map(task => {
+                                                                const subList = task.subtasks || [];
+                                                                const doneSubs = subList.filter(s => s.completed).length;
+                                                                const totalSubs = subList.length;
+                                                                const subPercent = totalSubs > 0 ? Math.round((doneSubs / totalSubs) * 100) : 0;
+                                                                const isOverdue = task.dueDate && new Date(task.dueDate) < (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })() && task.status !== 'blocked';
+
+                                                                return (
+                                                                    <div
+                                                                        key={task.id}
+                                                                        className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-all gap-4 group relative"
+                                                                    >
+                                                                        {/* Left: Checkbox + Title */}
+                                                                        <div className="flex items-center gap-4 flex-1 min-w-0">
+                                                                            <button
+                                                                                onClick={() => handleToggleTaskStatus(task)}
+                                                                                className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all ${task.status === 'blocked'
+                                                                                    ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm'
+                                                                                    : 'border-gray-300 hover:border-gray-400 bg-white'
+                                                                                    }`}
+                                                                            >
+                                                                                {task.status === 'blocked' && (
+                                                                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="3.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                                                                                )}
+                                                                            </button>
+
+                                                                            <div className="min-w-0 flex-1">
+                                                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                                                    <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-sm ${task.category === 'Design' ? 'bg-purple-50 text-purple-600' :
+                                                                                        task.category === 'Business' ? 'bg-blue-50 text-blue-600' :
+                                                                                            task.category === 'Development' ? 'bg-orange-50 text-orange-600' :
+                                                                                                'bg-gray-100 text-gray-600'
+                                                                                        }`}>
+                                                                                        {task.category || 'General'}
+                                                                                    </span>
+
+                                                                                    <div className="flex items-center gap-1">
+                                                                                        <div className={`w-1.5 h-1.5 rounded-full ${task.priority === 'high' ? 'bg-red-500 animate-pulse' :
+                                                                                            task.priority === 'medium' ? 'bg-yellow-500' :
+                                                                                                'bg-green-500'
+                                                                                            }`}></div>
+                                                                                        <span className="text-[11px] text-gray-400 font-semibold capitalize">{task.priority}</span>
+                                                                                    </div>
+                                                                                </div>
+                                                                                <h4 className={`font-semibold text-gray-900 text-sm md:text-base ${task.status === 'blocked' ? 'line-through text-gray-400' : ''}`}>
+                                                                                    {task.title}
+                                                                                </h4>
+                                                                                {task.description && (
+                                                                                    <p className="text-gray-400 text-xs truncate mt-0.5 max-w-lg">{task.description}</p>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+
+                                                                        {/* Right: Subtasks, Due Date & Actions */}
+                                                                        <div className="flex items-center gap-6 justify-between md:justify-end flex-wrap md:flex-nowrap">
+                                                                            {/* Subtasks Progress */}
+                                                                            {totalSubs > 0 && (
+                                                                                <div className="flex flex-col gap-1 w-24">
+                                                                                    <div className="flex justify-between items-center text-[10px] font-bold text-gray-400">
+                                                                                        <span>Subtasks</span>
+                                                                                        <span>{doneSubs}/{totalSubs}</span>
+                                                                                    </div>
+                                                                                    <div className="w-full bg-gray-100 rounded-full h-1">
+                                                                                        <div
+                                                                                            className="h-1 rounded-full bg-indigo-505 bg-indigo-500 transition-all duration-300"
+                                                                                            style={{ width: `${subPercent}%` }}
+                                                                                        ></div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            )}
+
+                                                                            {/* Due Date */}
+                                                                            {task.dueDate && (
+                                                                                <div className={`flex items-center gap-1.5 text-xs font-semibold px-2 py-1 rounded ${isOverdue
+                                                                                    ? 'bg-red-50 text-red-600 border border-red-100 animate-pulse'
+                                                                                    : 'bg-gray-50 text-gray-400'
+                                                                                    }`}>
+                                                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                                                                    {formatDate(task.dueDate)}
+                                                                                </div>
+                                                                            )}
+
+                                                                            {/* Actions */}
+                                                                            <div className="flex items-center gap-1">
+                                                                                <button
+                                                                                    onClick={() => openEditModal(task)}
+                                                                                    className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                                                                                    title="Edit"
+                                                                                >
+                                                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                                                                </button>
+                                                                                <button
+                                                                                    onClick={() => handleDeleteTask(task.id)}
+                                                                                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                                                                                    title="Delete"
+                                                                                >
+                                                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                                                </button>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                );
+                                                            })
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
-                            </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -908,6 +1188,59 @@ export default function TasksPage() {
                                             className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg focus:ring-1 focus:ring-gray-900 focus:border-gray-900 outline-none text-sm transition-all"
                                         />
                                     </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-medium text-gray-700 uppercase tracking-wide mb-2">Checklist / Subtasks</label>
+                                    <div className="flex gap-2 mb-3">
+                                        <input
+                                            type="text"
+                                            value={subtaskInput}
+                                            onChange={(e) => setSubtaskInput(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    addSubtask();
+                                                }
+                                            }}
+                                            placeholder="Add a checklist item..."
+                                            className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-1 focus:ring-gray-900 focus:border-gray-900 outline-none text-sm transition-all"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={addSubtask}
+                                            className="px-3 rounded-lg text-white font-medium text-xs font-bold transition-all bg-gray-900 hover:bg-black"
+                                        >
+                                            Add
+                                        </button>
+                                    </div>
+
+                                    {newTask.subtasks && newTask.subtasks.length > 0 && (
+                                        <div className="max-h-36 overflow-y-auto space-y-2 border border-gray-100 rounded-lg p-2.5 bg-gray-50/30 custom-scrollbar">
+                                            {newTask.subtasks.map((sub) => (
+                                                <div key={sub.id} className="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded border border-gray-100 shadow-sm">
+                                                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={sub.completed}
+                                                            onChange={() => toggleSubtask(sub.id)}
+                                                            className="w-4 h-4 rounded border-gray-300 text-indigo-650 cursor-pointer"
+                                                        />
+                                                        <span className={`text-xs text-gray-700 truncate ${sub.completed ? 'line-through text-gray-400' : ''}`}>
+                                                            {sub.text}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => deleteSubtask(sub.id)}
+                                                        className="text-gray-400 hover:text-red-650 p-0.5 rounded transition-all hover:text-red-600"
+                                                    >
+                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="pt-4 flex gap-3">

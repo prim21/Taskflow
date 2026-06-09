@@ -213,8 +213,17 @@ export async function createEvent(eventData, token) {
     return result.data;
 }
 
+export async function deleteEvent(id, token) {
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    return await fetchAPI(`/calendar/events/${id}`, {
+        method: 'DELETE',
+        headers
+    });
+}
+
 export async function getSchedulingSuggestions(params, token) {
     const queryParams = new URLSearchParams(params).toString();
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
     return (await fetchAPI(`/calendar/suggest-slots?${queryParams}`, { headers })).data;
 }
+

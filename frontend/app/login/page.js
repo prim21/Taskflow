@@ -83,7 +83,7 @@ export default function LoginPage() {
                 <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-xl shadow-gray-200/50 border border-gray-100 p-8">
                     <div className="text-center mb-8">
                         <h1 className="text-2xl font-bold text-gray-900 mb-2">Welcome Back</h1>
-                        <p className="text-gray-500 text-sm">Sign in to continue to your dashboard</p>
+                        <p className="text-gray-500 text-sm">Sign in to continue to your workspace</p>
                     </div>
 
                     {successMessage && (

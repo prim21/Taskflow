@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import DashboardSidebar from '@/components/DashboardSidebar';
-import { getEvents, createEvent, getSchedulingSuggestions } from '@/lib/api';
+import { getEvents, createEvent, deleteEvent, getSchedulingSuggestions } from '@/lib/api';
 
 export default function CalendarPage() {
     const { user, loading: authLoading, getToken, logout, storageStats } = useAuth();
@@ -22,7 +22,7 @@ export default function CalendarPage() {
         startDate: '',
         endDate: '',
         type: 'meeting',
-        color: '#3b82f6'
+        color: '#bae6fd'
     });
 
     useEffect(() => {
@@ -39,8 +39,13 @@ export default function CalendarPage() {
             const token = await getToken();
             // Calculate range based on view
             // For simplicity, just fetch broad range
-            const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString();
-            const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString();
+            const startDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+            startDay.setHours(0, 0, 0, 0);
+            const start = startDay.toISOString();
+
+            const endDay = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+            endDay.setHours(23, 59, 59, 999);
+            const end = endDay.toISOString();
 
             const data = await getEvents({ startDate: start, endDate: end }, token);
             setEvents(data || []);
@@ -57,13 +62,25 @@ export default function CalendarPage() {
             const token = await getToken();
             await createEvent(newEvent, token);
             setIsCreateModalOpen(false);
-            setNewEvent({ title: '', startDate: '', endDate: '', type: 'meeting', color: '#3b82f6' });
+            setNewEvent({ title: '', startDate: '', endDate: '', type: 'meeting', color: '#bae6fd' });
             fetchEvents();
         } catch (error) {
             console.error(error);
             alert('Failed to create event');
         }
     };
+
+    const handleDeleteEvent = async (id) => {
+        try {
+            const token = await getToken();
+            await deleteEvent(id, token);
+            setEvents(prev => prev.filter(e => e.id !== id));
+        } catch (error) {
+            console.error('Failed to delete event', error);
+            alert('Failed to delete event');
+        }
+    };
+
 
     const prevMonth = () => {
         setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
@@ -146,21 +163,70 @@ export default function CalendarPage() {
                                         </div>
                                         <div className="space-y-1">
                                             {events
-                                                .filter(e => new Date(e.startDate).getDate() === date.getDate())
-                                                .map(event => (
-                                                    <div
-                                                        key={event.id}
-                                                        className="text-xs px-2 py-1 rounded-md text-white truncate cursor-pointer hover:opacity-90 transition-opacity"
-                                                        style={{ backgroundColor: event.color }}
-                                                    >
-                                                        {event.title}
-                                                    </div>
-                                                ))
+                                                .filter(e => {
+                                                    const eventDate = new Date(e.startDate);
+                                                    return eventDate.getFullYear() === date.getFullYear() &&
+                                                        eventDate.getMonth() === date.getMonth() &&
+                                                        eventDate.getDate() === date.getDate();
+                                                })
+                                                .map(event => {
+                                                    const isLightColor = (hex) => {
+                                                        if (!hex || typeof hex !== 'string' || !hex.startsWith('#')) return true;
+                                                        const c = hex.substring(1);
+                                                        if (c.length !== 3 && c.length !== 6) return true;
+                                                        let r, g, b;
+                                                        if (c.length === 3) {
+                                                            r = parseInt(c[0] + c[0], 16);
+                                                            g = parseInt(c[1] + c[1], 16);
+                                                            b = parseInt(c[2] + c[2], 16);
+                                                        } else {
+                                                            r = parseInt(c.substring(0, 2), 16);
+                                                            g = parseInt(c.substring(2, 4), 16);
+                                                            b = parseInt(c.substring(4, 6), 16);
+                                                        }
+                                                        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                                                        return luma > 140;
+                                                    };
+                                                    const isLight = isLightColor(event.color);
+
+                                                    return (
+                                                        <div
+                                                            key={event.id}
+                                                            className={`group/item relative text-xs px-2 py-1 pr-6 rounded-md truncate cursor-pointer hover:opacity-90 transition-all border ${isLight
+                                                                    ? 'text-slate-800 border-black/5 font-medium shadow-sm'
+                                                                    : 'text-white border-transparent'
+                                                                }`}
+                                                            style={{ backgroundColor: event.color || '#bae6fd' }}
+                                                        >
+                                                            <span className="truncate block">{event.title}</span>
+                                                            <button
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleDeleteEvent(event.id);
+                                                                }}
+                                                                className={`absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/item:opacity-100 p-0.5 rounded hover:bg-black/10 transition-opacity ${isLight ? 'text-slate-800' : 'text-white'
+                                                                    }`}
+                                                                title="Delete Event"
+                                                            >
+                                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                                                            </button>
+                                                        </div>
+                                                    );
+                                                })
                                             }
                                         </div>
+
                                         <button
                                             onClick={() => {
-                                                setNewEvent(prev => ({ ...prev, startDate: date.toISOString().split('T')[0] }));
+                                                const year = date.getFullYear();
+                                                const month = String(date.getMonth() + 1).padStart(2, '0');
+                                                const day = String(date.getDate()).padStart(2, '0');
+                                                const localDateStr = `${year}-${month}-${day}`;
+                                                setNewEvent(prev => ({
+                                                    ...prev,
+                                                    startDate: `${localDateStr}T09:00`,
+                                                    endDate: `${localDateStr}T10:00`
+                                                }));
                                                 setIsCreateModalOpen(true);
                                             }}
                                             className="absolute bottom-2 right-2 w-6 h-6 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 opacity-0 group-hover:opacity-100 hover:bg-blue-50 hover:text-blue-600 transition-all font-bold"
@@ -213,7 +279,7 @@ export default function CalendarPage() {
                             <div>
                                 <label className="text-xs text-gray-500 block mb-1">Color</label>
                                 <div className="flex gap-2">
-                                    {['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'].map(c => (
+                                    {['#bae6fd', '#fecdd3', '#a7f3d0', '#fde68a', '#e9d5ff'].map(c => (
                                         <button
                                             key={c}
                                             type="button"
@@ -223,6 +289,7 @@ export default function CalendarPage() {
                                         />
                                     ))}
                                 </div>
+
                             </div>
                             <div className="flex justify-end gap-3 pt-4">
                                 <button type="button" onClick={() => setIsCreateModalOpen(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-xl">Cancel</button>

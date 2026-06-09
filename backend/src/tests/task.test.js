@@ -24,7 +24,7 @@ describe('Task API Endpoints', () => {
             const taskData = {
                 title: 'Test Task',
                 description: 'This is a test task',
-                status: 'pending',
+                status: 'todo',
                 priority: 'high',
             };
 
@@ -61,7 +61,7 @@ describe('Task API Endpoints', () => {
         });
 
         it('should filter tasks by status', async () => {
-            const res = await request(app).get('/api/tasks?status=pending');
+            const res = await request(app).get('/api/tasks?status=todo');
 
             expect(res.statusCode).toBe(200);
             expect(res.body.success).toBe(true);
@@ -91,7 +91,7 @@ describe('Task API Endpoints', () => {
         it('should update a task', async () => {
             const updateData = {
                 title: 'Updated Task',
-                status: 'completed',
+                status: 'blocked',
             };
 
             const res = await request(app)
@@ -113,8 +113,8 @@ describe('Task API Endpoints', () => {
             expect(res.statusCode).toBe(200);
             expect(res.body.success).toBe(true);
             expect(res.body.data).toHaveProperty('total');
-            expect(res.body.data).toHaveProperty('pending');
-            expect(res.body.data).toHaveProperty('completed');
+            expect(res.body.data).toHaveProperty('byStatus');
+            expect(res.body.data).toHaveProperty('byPriority');
         });
     });
 
