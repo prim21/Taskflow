@@ -885,7 +885,12 @@ export default function TasksPage() {
                                 </div>
                             </div>
 
-                            {viewMode === 'board' ? (
+                            {loading ? (
+                                <div className="flex-1 flex flex-col items-center justify-center py-20 bg-gray-50/40 border border-dashed border-gray-200 rounded-3xl min-h-[400px]">
+                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-3"></div>
+                                    <p className="text-sm text-gray-500 font-medium">Loading your tasks...</p>
+                                </div>
+                            ) : viewMode === 'board' ? (
                                 /* Kanban Board View */
                                 <>
                                     <div className="flex-1 overflow-x-auto pb-4 -mx-8 px-8">

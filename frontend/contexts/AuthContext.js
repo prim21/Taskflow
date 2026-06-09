@@ -24,7 +24,11 @@ export function AuthProvider({ children }) {
                 // Set the user immediately with Firebase auth details to unblock the UI/redirects
                 setUser(firebaseUser);
                 setLoading(false);
-                refreshStorageStats();
+                
+                // Defer non-critical storage insights API call to prioritize primary views (tasks, calendars)
+                setTimeout(() => {
+                    refreshStorageStats();
+                }, 2000);
 
                 try {
                     // Get the ID token for API requests
