@@ -15,9 +15,15 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
 
-    const { login } = useAuth();
+    const { login, user } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
+
+    useEffect(() => {
+        if (user) {
+            router.push('/tasks');
+        }
+    }, [user, router]);
 
     useEffect(() => {
         if (searchParams.get('registered') === 'true') {
