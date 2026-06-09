@@ -19,20 +19,37 @@ const firebaseConfig = {
 let useMemoryMock = process.env.NODE_ENV === 'test';
 let realDb = null;
 
-// Initialize Firebase Admin using service account key or Application Default Credentials
+// Initialize Firebase Admin using env variables, service account key, or Application Default Credentials
 if (!admin.apps.length) {
     let credential;
-    try {
-        const serviceAccount = require('./ServiceAccountKey.json');
-        credential = admin.credential.cert(serviceAccount);
-        console.log('🔥 Initialized Firebase Admin SDK with ServiceAccountKey.json');
-    } catch (err) {
-        console.log('⚠️ ServiceAccountKey.json not found. Attempting Application Default Credentials...');
+
+    // Check environment variables first (ideal for cloud deployment like Render)
+    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
         try {
-            credential = admin.credential.applicationDefault();
-        } catch (credErr) {
-            console.log('❌ Failed to load Application Default Credentials. Fallback to in-memory mock.');
-            useMemoryMock = true;
+            credential = admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            });
+            console.log('🔥 Initialized Firebase Admin SDK with Environment Variables');
+        } catch (envErr) {
+            console.log('⚠️ Failed to initialize with Environment Variables. Trying fallback methods...');
+        }
+    }
+
+    if (!credential) {
+        try {
+            const serviceAccount = require('./ServiceAccountKey.json');
+            credential = admin.credential.cert(serviceAccount);
+            console.log('🔥 Initialized Firebase Admin SDK with ServiceAccountKey.json');
+        } catch (err) {
+            console.log('⚠️ ServiceAccountKey.json not found. Attempting Application Default Credentials...');
+            try {
+                credential = admin.credential.applicationDefault();
+            } catch (credErr) {
+                console.log('❌ Failed to load Application Default Credentials. Fallback to in-memory mock.');
+                useMemoryMock = true;
+            }
         }
     }
 
